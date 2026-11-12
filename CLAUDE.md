@@ -50,6 +50,16 @@ The approved pseudocode is in Section 2 of the prompt (and `docs/pseudocode.md`)
   system date.
 - The three user messages are exact: "No hospital records loaded.",
   "Invalid blood type.", "No compatible units available."
+- `docs/plan.md` is the approved build plan. Follow its module list and build
+  order.
+- `src/locator.py` holds the `BloodUnitLocator` pseudocode block as two
+  functions: `prepare_registry` (empty check, filter, sort once) and
+  `search_patient` (invalid-type check, search, no-units check). It does not
+  import Tkinter. `src/algorithms.py` still has exactly six functions.
+- The Trace tab searches for the blood type selected in the dropdown, so both
+  a found type and a not-found type (-1) can be shown.
+- The hospital data is fictional. `README.md` and the GUI status bar both say
+  so.
 
 ## Code style
 

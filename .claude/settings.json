@@ -7,7 +7,12 @@
       "Read(./**)",
       "Edit(./src/**)",
       "Edit(./tests/**)",
-      "Edit(./docs/**)"
+      "Edit(./docs/**)",
+      "Bash(git:*)",
+      "Edit(./data/**)",
+      "Edit(./main.py)",
+      "Edit(./README.md)",
+      "Edit(./CLAUDE.md)"
     ],
     "deny": [
       "Bash(pip install:*)",
