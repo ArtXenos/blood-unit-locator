@@ -58,16 +58,19 @@ def parse_row(row):
     #    The csv module stores extra values under the key None.
     if None in row:
         return None, "too many values in this row"
+    # A line break inside a value means a quote was opened and never closed,
+    # so several lines of the file were glued into one value. This is checked
+    # before the missing values, because a glued row also looks incomplete.
+    for column in COLUMNS:
+        value = row.get(column)
+        if value is not None and ("\n" in value.strip() or "\r" in value.strip()):
+            return None, "a value has a line break (a quote is not closed, so the rows up to this line were lost)"
     for column in COLUMNS:
         value = row.get(column)
         if value is None or value.strip() == "":
             return None, "missing " + column
 
-    # A line break inside the name means a quote was opened and never
-    # closed, so several lines of the file were glued into one value.
     hospital = row["hospital"].strip()
-    if "\n" in hospital or "\r" in hospital:
-        return None, "the hospital name has a line break (a quote is not closed)"
 
     # 2. The blood type must be one of the eight real types.
     blood_type = row["blood_type"].strip().upper()
@@ -80,6 +83,10 @@ def parse_row(row):
     units_text = row["units"].strip()
     if not (units_text.isascii() and units_text.isdigit()):
         return None, "units is not a whole number (0 or more)"
+    # A number with more than 6 digits is a typing mistake, and Python
+    # refuses to convert extremely long digit texts at all.
+    if len(units_text) > 6:
+        return None, "units is too large"
     units = int(units_text)
 
     # 4. Distance must be a real, non-negative number. Writing the check as
