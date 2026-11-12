@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(python -m unittest:*)",
+      "Bash(grep:*)",
+      "Read(./**)",
+      "Edit(./src/**)",
+      "Edit(./tests/**)",
+      "Edit(./docs/**)"
+    ],
+    "deny": [
+      "Bash(pip install:*)",
+      "Bash(rm -rf:*)",
+      "Read(./.env)"
+    ]
+  }
+}
