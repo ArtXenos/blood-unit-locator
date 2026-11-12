@@ -7,10 +7,19 @@ worked out by hand and are written as plain lists.
 Each test docstring states the Input, the Expected output and Why it matters.
 """
 
+import os
+import tempfile
 import unittest
 from datetime import date
 
-from src.models import BloodUnit, get_blood_type, get_distance
+from src.models import (
+    BloodUnit,
+    MSG_INVALID_TYPE,
+    MSG_NO_RECORDS,
+    MSG_NO_UNITS,
+    get_blood_type,
+    get_distance,
+)
 from src.algorithms import (
     filter_usable,
     merge_sort,
@@ -19,6 +28,8 @@ from src.algorithms import (
     find_last,
     find_compatible_units,
 )
+from src.locator import prepare_registry, search_patient
+from src.data_loader import load_records, parse_row
 
 # The fixed "today" used by every test. Never the system clock.
 TODAY = date(2026, 11, 1)
@@ -620,6 +631,522 @@ class TestTrace(unittest.TestCase):
             {"low": 4, "mid": 4, "high": 4, "value": "O+", "target": "O+"},
         ]
         self.assertEqual(trace, expected)
+
+
+# A date before TODAY, used for records that are already expired.
+EXPIRED = date(2025, 1, 15)
+
+# The first line every hospital CSV file must have.
+CSV_HEADER = "hospital,blood_type,units,distance_km,expiry_date"
+
+
+class TestLocator(unittest.TestCase):
+    """Tests for prepare_registry and search_patient in src/locator.py.
+
+    Tests 1 to 6 are the six required test cases of the project. Each one
+    goes through the whole pipeline: filter, order by blood type, search,
+    order by distance.
+    """
+
+    def test_1_many_matches_o_positive_patient(self):
+        """Input: patient "O+"; nine records in no particular order:
+        O+ at 6.0, 0.9 and 4.1 km, O- at 2.5 and 8.2 km, one A+, one B+,
+        one O+ with 0 units (0.5 km) and one expired O- (0.3 km).
+        Expected: Mintal 0.9, Toril 2.5, Lanang 4.1, Bajada 6.0, Agdao 8.2
+        and an empty message.
+        Why: the normal case - only safe and usable donor units, nearest
+        hospital first. The two unusable units are the nearest of all, so
+        the test fails if the filter is skipped.
+        """
+        records = [
+            make_unit("Bajada General Hospital", "O+", distance_km=6.0),
+            make_unit("Toril Community Hospital", "O-", distance_km=2.5),
+            make_unit("Buhangin District Hospital", "A+", distance_km=1.0),
+            make_unit("Mintal Doctors Hospital", "O+", distance_km=0.9),
+            make_unit("Panacan Family Hospital", "O+", units=0, distance_km=0.5),
+            make_unit("Agdao Mercy Hospital", "O-", distance_km=8.2),
+            make_unit("Sasa Wharfside Hospital", "B+", distance_km=3.0),
+            make_unit("Bangkal Hillside Hospital", "O-", distance_km=0.3,
+                      expiry_date=EXPIRED),
+            make_unit("Lanang Bayview Medical Center", "O+", distance_km=4.1),
+        ]
+        registry, message = prepare_registry(records, TODAY)
+        self.assertEqual(message, "")
+        results, message = search_patient(registry, "O+")
+        self.assertEqual(message, "")
+        self.assertEqual(hospital_names(results), [
+            "Mintal Doctors Hospital",
+            "Toril Community Hospital",
+            "Lanang Bayview Medical Center",
+            "Bajada General Hospital",
+            "Agdao Mercy Hospital",
+        ])
+        self.assertEqual(blood_types(results), ["O+", "O-", "O+", "O+", "O-"])
+        self.assertEqual(distances(results), [0.9, 2.5, 4.1, 6.0, 8.2])
+
+    def test_2_one_match(self):
+        """Input: patient "O-"; records: A+ at 1.0 km, O- at 7.0 km, B+ at
+        2.0 km and one O- with 0 units at 0.5 km.
+        Expected: a list with only Toril Community Hospital (O-, 7.0 km)
+        and an empty message.
+        Why: an O- patient can only receive O-, so exactly one usable
+        record must come back as a list of one.
+        """
+        records = [
+            make_unit("Bajada General Hospital", "A+", distance_km=1.0),
+            make_unit("Toril Community Hospital", "O-", distance_km=7.0),
+            make_unit("Buhangin District Hospital", "B+", distance_km=2.0),
+            make_unit("Mintal Doctors Hospital", "O-", units=0, distance_km=0.5),
+        ]
+        registry, message = prepare_registry(records, TODAY)
+        results, message = search_patient(registry, "O-")
+        self.assertEqual(message, "")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(hospital_names(results), ["Toril Community Hospital"])
+        self.assertEqual(blood_types(results), ["O-"])
+
+    def test_3_edge_all_o_negative_units_unusable(self):
+        """Input: patient "O-"; three O- records that are all unusable
+        (0 units, expired on 2025-01-15, expiring exactly today) plus a
+        usable A+ and a usable O+ record.
+        Expected: results [] and the message "No compatible units available."
+        Why: edge case - the blood type exists in the file, but none of it
+        can be used. The other types must not be offered to an O- patient.
+        """
+        records = [
+            make_unit("Bajada General Hospital", "O-", units=0),
+            make_unit("Buhangin District Hospital", "A+", distance_km=2.0),
+            make_unit("Toril Community Hospital", "O-", expiry_date=EXPIRED),
+            make_unit("Agdao Mercy Hospital", "O+", distance_km=3.0),
+            make_unit("Mintal Doctors Hospital", "O-", expiry_date=TODAY),
+        ]
+        registry, message = prepare_registry(records, TODAY)
+        self.assertEqual(message, "")
+        results, message = search_patient(registry, "O-")
+        self.assertEqual(results, [])
+        self.assertEqual(message, "No compatible units available.")
+
+    def test_4_edge_empty_dataset(self):
+        """Input: an empty list of records.
+        Expected: registry [] and the message "No hospital records loaded."
+        Why: edge case - the program must say clearly that nothing was
+        loaded instead of crashing.
+        """
+        registry, message = prepare_registry([], TODAY)
+        self.assertEqual(registry, [])
+        self.assertEqual(message, "No hospital records loaded.")
+
+    def test_5_edge_invalid_blood_type(self):
+        """Input: patient types "C+", "" and "o+" on a registry that has
+        usable O+ and A+ units.
+        Expected: results [] and the message "Invalid blood type." for all
+        three.
+        Why: edge case - a type that is not in the compatibility table must
+        be refused before any search. Lower case "o+" is not in the table.
+        """
+        records = [
+            make_unit("Bajada General Hospital", "O+", distance_km=1.0),
+            make_unit("Toril Community Hospital", "A+", distance_km=2.0),
+        ]
+        registry, message = prepare_registry(records, TODAY)
+        for patient_type in ["C+", "", "o+"]:
+            results, message = search_patient(registry, patient_type)
+            self.assertEqual(results, [])
+            self.assertEqual(message, "Invalid blood type.")
+
+    def test_6_stability_equal_distances_keep_order(self):
+        """Input: patient "O+"; records in this order: Toril O- 3.0,
+        Bajada O+ 3.0, Mintal O+ 3.0, Agdao O+ 1.0, Buhangin O- 3.0.
+        Expected: Agdao (1.0) first, then the four units at 3.0 km as
+        Bajada, Mintal (O+ in input order), Toril, Buhangin (O- in input
+        order).
+        Why: Merge Sort is stable, so units at the same distance keep the
+        compatibility-table order (O+ before O-) and, inside one type, the
+        order they had in the file.
+        """
+        records = [
+            make_unit("Toril Community Hospital", "O-", distance_km=3.0),
+            make_unit("Bajada General Hospital", "O+", distance_km=3.0),
+            make_unit("Mintal Doctors Hospital", "O+", distance_km=3.0),
+            make_unit("Agdao Mercy Hospital", "O+", distance_km=1.0),
+            make_unit("Buhangin District Hospital", "O-", distance_km=3.0),
+        ]
+        registry, message = prepare_registry(records, TODAY)
+        results, message = search_patient(registry, "O+")
+        self.assertEqual(message, "")
+        self.assertEqual(hospital_names(results), [
+            "Agdao Mercy Hospital",
+            "Bajada General Hospital",
+            "Mintal Doctors Hospital",
+            "Toril Community Hospital",
+            "Buhangin District Hospital",
+        ])
+        self.assertEqual(distances(results), [1.0, 3.0, 3.0, 3.0, 3.0])
+
+    def test_prepare_registry_orders_by_blood_type_and_removes_unusable(self):
+        """Input: usable O+, A- and A+ records, one B+ with 0 units and one
+        expired O-.
+        Expected: a registry of three records with types A+, A-, O+ and an
+        empty message.
+        Why: the registry must be clean and in blood type order, because
+        Binary Search only works on an ordered list.
+        """
+        records = [
+            make_unit("Bajada General Hospital", "O+"),
+            make_unit("Toril Community Hospital", "A-"),
+            make_unit("Buhangin District Hospital", "B+", units=0),
+            make_unit("Mintal Doctors Hospital", "O-", expiry_date=EXPIRED),
+            make_unit("Agdao Mercy Hospital", "A+"),
+        ]
+        registry, message = prepare_registry(records, TODAY)
+        self.assertEqual(message, "")
+        self.assertEqual(blood_types(registry), ["A+", "A-", "O+"])
+        self.assertEqual(hospital_names(registry), [
+            "Agdao Mercy Hospital",
+            "Toril Community Hospital",
+            "Bajada General Hospital",
+        ])
+
+    def test_prepare_registry_drops_unit_expiring_today(self):
+        """Input: one O+ unit expiring exactly on TODAY and one O+ unit
+        expiring the day after.
+        Expected: the registry holds only the unit expiring the day after.
+        Why: expiry is strict, and the rule must also hold in the full
+        pipeline, not only in filter_usable.
+        """
+        records = [
+            make_unit("Bajada General Hospital", "O+", expiry_date=TODAY),
+            make_unit("Toril Community Hospital", "O+",
+                      expiry_date=date(2026, 11, 2)),
+        ]
+        registry, message = prepare_registry(records, TODAY)
+        self.assertEqual(hospital_names(registry), ["Toril Community Hospital"])
+
+    def test_message_constants_have_the_exact_texts(self):
+        """Input: the three message constants from src/models.py.
+        Expected: "No hospital records loaded.", "Invalid blood type." and
+        "No compatible units available.", letter for letter.
+        Why: the pseudocode fixes these texts, and the GUI shows them.
+        """
+        self.assertEqual(MSG_NO_RECORDS, "No hospital records loaded.")
+        self.assertEqual(MSG_INVALID_TYPE, "Invalid blood type.")
+        self.assertEqual(MSG_NO_UNITS, "No compatible units available.")
+
+
+def make_row(hospital="Bajada General Hospital", blood_type="O+", units="6",
+             distance_km="1.9", expiry_date="2027-04-08"):
+    """Build one CSV row as a dictionary of texts. The defaults are a good row."""
+    return {
+        "hospital": hospital,
+        "blood_type": blood_type,
+        "units": units,
+        "distance_km": distance_km,
+        "expiry_date": expiry_date,
+    }
+
+
+def write_csv(folder, lines):
+    """Write the given lines into a CSV file inside folder and return its path."""
+    csv_path = os.path.join(folder, "test_hospitals.csv")
+    with open(csv_path, "w", newline="", encoding="utf-8") as csv_file:
+        for line in lines:
+            csv_file.write(line + "\n")
+    return csv_path
+
+
+class TestDataLoader(unittest.TestCase):
+    """Tests for parse_row and load_records in src/data_loader.py."""
+
+    def check_bad_row(self, row):
+        """Check that parse_row refuses the row and says why."""
+        unit, problem = parse_row(row)
+        self.assertIsNone(unit)
+        self.assertIsInstance(problem, str)
+        self.assertNotEqual(problem, "")
+
+    def test_parse_row_good_row(self):
+        """Input: the row Bajada General Hospital, O+, "6", "1.9", "2027-04-08".
+        Expected: a BloodUnit with units 6 (int), distance 1.9 (float),
+        expiry date(2027, 4, 8), and an empty problem text.
+        Why: the CSV file gives only text; the numbers and the date must be
+        converted so they can be compared.
+        """
+        unit, problem = parse_row(make_row())
+        self.assertEqual(problem, "")
+        self.assertEqual(unit.hospital, "Bajada General Hospital")
+        self.assertEqual(unit.blood_type, "O+")
+        self.assertEqual(unit.units, 6)
+        self.assertIsInstance(unit.units, int)
+        self.assertEqual(unit.distance_km, 1.9)
+        self.assertIsInstance(unit.distance_km, float)
+        self.assertEqual(unit.expiry_date, date(2027, 4, 8))
+        self.assertIsInstance(unit.expiry_date, date)
+
+    def test_parse_row_trims_and_upper_cases_blood_type(self):
+        """Input: a row with blood type " o+ ".
+        Expected: a BloodUnit with blood type "O+".
+        Why: small typing differences in the file must not hide a unit
+        from the search, which compares exact strings.
+        """
+        unit, problem = parse_row(make_row(blood_type=" o+ "))
+        self.assertEqual(problem, "")
+        self.assertEqual(unit.blood_type, "O+")
+
+    def test_parse_row_zero_units_is_valid(self):
+        """Input: a row with units "0".
+        Expected: a BloodUnit with units 0 and an empty problem text.
+        Why: 0 units is real data, not a mistake. It is removed later by
+        filter_usable, not by the loader.
+        """
+        unit, problem = parse_row(make_row(units="0"))
+        self.assertEqual(problem, "")
+        self.assertEqual(unit.units, 0)
+
+    def test_parse_row_missing_field(self):
+        """Input: a row that has no "units" value at all.
+        Expected: unit is None and the problem text is not empty.
+        Why: a short line in the file must be skipped, not crash the program.
+        """
+        row = make_row()
+        del row["units"]
+        self.check_bad_row(row)
+        self.check_bad_row(make_row(units=None))
+
+    def test_parse_row_blank_field(self):
+        """Input: a row whose hospital name is only spaces.
+        Expected: unit is None and the problem text is not empty.
+        Why: a record without a hospital name is useless to the user.
+        """
+        self.check_bad_row(make_row(hospital="   "))
+
+    def test_parse_row_non_numeric_units(self):
+        """Input: a row with units "abc".
+        Expected: unit is None and the problem text is not empty.
+        Why: text where a number should be must not crash the loader.
+        """
+        self.check_bad_row(make_row(units="abc"))
+
+    def test_parse_row_negative_units(self):
+        """Input: a row with units "-3".
+        Expected: unit is None and the problem text is not empty.
+        Why: a hospital cannot hold a negative number of bags.
+        """
+        self.check_bad_row(make_row(units="-3"))
+
+    def test_parse_row_non_numeric_distance(self):
+        """Input: a row with distance "far".
+        Expected: unit is None and the problem text is not empty.
+        Why: the distance is the key of the final ordering, so it must be
+        a number.
+        """
+        self.check_bad_row(make_row(distance_km="far"))
+
+    def test_parse_row_negative_distance(self):
+        """Input: a row with distance "-2.5".
+        Expected: unit is None and the problem text is not empty.
+        Why: a negative distance would wrongly appear as the nearest hospital.
+        """
+        self.check_bad_row(make_row(distance_km="-2.5"))
+
+    def test_parse_row_nan_distance(self):
+        """Input: a row with distance "nan".
+        Expected: unit is None and the problem text is not empty.
+        Why: Python reads "nan" as a number, but it cannot be compared, so
+        it would break the ordering by distance.
+        """
+        self.check_bad_row(make_row(distance_km="nan"))
+
+    def test_parse_row_inf_distance(self):
+        """Input: a row with distance "inf".
+        Expected: unit is None and the problem text is not empty.
+        Why: Python reads "inf" as a number, but no hospital is infinitely
+        far away.
+        """
+        self.check_bad_row(make_row(distance_km="inf"))
+
+    def test_parse_row_impossible_date(self):
+        """Input: a row with expiry date "2027-02-30".
+        Expected: unit is None and the problem text is not empty.
+        Why: February 30 does not exist, so the expiry check cannot be trusted.
+        """
+        self.check_bad_row(make_row(expiry_date="2027-02-30"))
+
+    def test_parse_row_wrong_date_format(self):
+        """Input: a row with expiry date "15/03/2027".
+        Expected: unit is None and the problem text is not empty.
+        Why: only the YYYY-MM-DD format is accepted, so day and month can
+        never be mixed up.
+        """
+        self.check_bad_row(make_row(expiry_date="15/03/2027"))
+
+    def test_parse_row_unknown_blood_type(self):
+        """Input: a row with blood type "C+".
+        Expected: unit is None and the problem text is not empty.
+        Why: a type outside the eight real ones could never be matched.
+        """
+        self.check_bad_row(make_row(blood_type="C+"))
+
+    def test_parse_row_too_many_values(self):
+        """Input: a good row that also has extra values stored under the
+        key None (this is how the csv module keeps values past the last
+        column).
+        Expected: unit is None and the problem text is not empty.
+        Why: an extra comma shifts the values, so the row cannot be trusted
+        even if the first five values look fine.
+        """
+        row = make_row()
+        row[None] = ["extra"]
+        self.check_bad_row(row)
+
+    def test_parse_row_hospital_name_with_line_break(self):
+        """Input: a row whose hospital name is "Bajada General\\nHospital".
+        Expected: unit is None and the problem text is not empty.
+        Why: a line break inside a name means a quote was never closed in
+        the file, so several lines were glued into one value.
+        """
+        self.check_bad_row(make_row(hospital="Bajada General\nHospital"))
+
+    def test_parse_row_units_must_be_plain_digits(self):
+        """Input: three rows with units "+5", "1_000" and "3.5".
+        Expected: each row is refused (unit is None, problem text not empty).
+        Why: Python would accept "+5" and "1_000" as numbers, but in a
+        hospital file they are typing mistakes; half a bag ("3.5") does not
+        exist.
+        """
+        for units_text in ["+5", "1_000", "3.5"]:
+            self.check_bad_row(make_row(units=units_text))
+
+    def test_parse_row_units_with_spaces_is_accepted(self):
+        """Input: a row with units " 7 " (spaces around the number).
+        Expected: a BloodUnit with units 7 and an empty problem text.
+        Why: stray spaces are harmless and must not make the stricter
+        digits-only rule throw away a good row.
+        """
+        unit, problem = parse_row(make_row(units=" 7 "))
+        self.assertEqual(problem, "")
+        self.assertEqual(unit.units, 7)
+
+    def test_load_records_skips_row_with_extra_value(self):
+        """Input: a temporary CSV file with three rows; the middle row has
+        one extra value after the expiry date.
+        Expected: the first and third rows are kept, and skipped_rows has
+        exactly one non-empty entry.
+        Why: the too-many-values rule must also work when reading a real
+        file, without losing the good rows around the bad one.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            csv_path = write_csv(folder, [
+                CSV_HEADER,
+                "Bajada General Hospital,O+,6,1.9,2027-04-08",
+                "Buhangin District Hospital,B+,7,6.8,2027-05-02,extra",
+                "Toril Community Hospital,A-,4,14.5,2027-01-20",
+            ])
+            records, skipped_rows = load_records(csv_path)
+        self.assertEqual(hospital_names(records),
+                         ["Bajada General Hospital", "Toril Community Hospital"])
+        self.assertEqual(len(skipped_rows), 1)
+        self.assertIsInstance(skipped_rows[0], str)
+        self.assertNotEqual(skipped_rows[0], "")
+
+    def test_load_records_good_file(self):
+        """Input: a temporary CSV file with the header and two good rows.
+        Expected: two records, in file order, and no skipped rows.
+        Why: the normal case of reading the hospital file.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            csv_path = write_csv(folder, [
+                CSV_HEADER,
+                "Bajada General Hospital,O+,6,1.9,2027-04-08",
+                "Toril Community Hospital,A-,4,14.5,2027-01-20",
+            ])
+            records, skipped_rows = load_records(csv_path)
+        self.assertEqual(hospital_names(records),
+                         ["Bajada General Hospital", "Toril Community Hospital"])
+        self.assertEqual(blood_types(records), ["O+", "A-"])
+        self.assertEqual(distances(records), [1.9, 14.5])
+        self.assertEqual(skipped_rows, [])
+
+    def test_load_records_skips_bad_rows(self):
+        """Input: a temporary CSV file with two good rows and three bad rows
+        (units "abc", blood type "C+", date "2027-02-30") mixed in.
+        Expected: the two good records are kept, skipped_rows has three
+        entries, and nothing crashes.
+        Why: one bad line must never stop the rest of the file from loading.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            csv_path = write_csv(folder, [
+                CSV_HEADER,
+                "Bajada General Hospital,O+,6,1.9,2027-04-08",
+                "Buhangin District Hospital,B+,abc,6.8,2027-05-02",
+                "Mintal Doctors Hospital,C+,9,11.3,2027-06-30",
+                "Toril Community Hospital,A-,4,14.5,2027-01-20",
+                "Agdao Mercy Hospital,O-,5,4.1,2027-02-30",
+            ])
+            records, skipped_rows = load_records(csv_path)
+        self.assertEqual(hospital_names(records),
+                         ["Bajada General Hospital", "Toril Community Hospital"])
+        self.assertEqual(len(skipped_rows), 3)
+        for text in skipped_rows:
+            self.assertIsInstance(text, str)
+            self.assertNotEqual(text, "")
+
+    def test_load_records_header_only_file(self):
+        """Input: a temporary CSV file with only the header line.
+        Expected: ([], []).
+        Why: a file with no data rows is not an error; it leads to the
+        message "No hospital records loaded." later.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            csv_path = write_csv(folder, [CSV_HEADER])
+            records, skipped_rows = load_records(csv_path)
+        self.assertEqual(records, [])
+        self.assertEqual(skipped_rows, [])
+
+    def test_load_records_empty_file(self):
+        """Input: a temporary CSV file with nothing in it.
+        Expected: ([], []).
+        Why: a completely empty file must not crash the loader.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            csv_path = write_csv(folder, [])
+            records, skipped_rows = load_records(csv_path)
+        self.assertEqual(records, [])
+        self.assertEqual(skipped_rows, [])
+
+    def test_load_records_missing_column(self):
+        """Input: a temporary CSV file whose header has no expiry_date column.
+        Expected: no records, and skipped_rows is not empty.
+        Why: the wrong kind of file must be reported, not half-loaded.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            csv_path = write_csv(folder, [
+                "hospital,blood_type,units,distance_km",
+                "Bajada General Hospital,O+,6,1.9",
+            ])
+            records, skipped_rows = load_records(csv_path)
+        self.assertEqual(records, [])
+        self.assertTrue(len(skipped_rows) > 0)
+
+    def test_load_real_dataset(self):
+        """Input: the project file data/hospitals.csv.
+        Expected: 22 records, 0 skipped rows, at least one record with
+        0 units and at least one with an expiry date before TODAY.
+        Why: the real file must load cleanly and must contain the unusable
+        rows that the demo needs to show the filter working.
+        """
+        csv_path = os.path.join("data", "hospitals.csv")
+        records, skipped_rows = load_records(csv_path)
+        self.assertEqual(len(records), 22)
+        self.assertEqual(skipped_rows, [])
+        zero_unit_count = 0
+        expired_count = 0
+        for record in records:
+            if record.units == 0:
+                zero_unit_count = zero_unit_count + 1
+            if record.expiry_date < TODAY:
+                expired_count = expired_count + 1
+        self.assertTrue(zero_unit_count >= 1)
+        self.assertTrue(expired_count >= 1)
 
 
 if __name__ == "__main__":
