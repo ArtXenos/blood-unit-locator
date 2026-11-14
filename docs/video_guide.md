@@ -1,10 +1,96 @@
 # Video Guide — Emergency Blood Unit Locator
 
-Notes for the recorded explanation. Part 1 has two or three sentences for each
-function. Part 2 is a script for the 2-minute live demo. Say these in your own
-words; they are prompts, not lines to read out.
+Notes for the recorded explanation. Part 1 is the recording plan: the six
+required segments, what to show in each one, and the checklists. Part 2 has two
+or three sentences for each function. Part 3 is the 2-minute live demo. The
+full spoken script is in `docs/video_script.md`. Say everything in your own
+words; these are prompts, not lines to read out.
 
-## Part 1 — What to say for each function
+Deadline: November 18, 2026, 5:00 PM.
+
+## Part 1 — Recording plan
+
+### The six segments (15 minutes in total)
+
+| # | Segment | Time | Length | Show on screen | Must cover |
+|---|---|---|---|---|---|
+| 1 | Introduction | 0:00 – 1:00 | 1 min | Face large, `README.md` preview behind it | Project title and the real-world problem |
+| 2 | Algorithm Explanation | 1:00 – 4:00 | 3 min | `docs/pseudocode.md` beside `src/algorithms.py`, then `src/locator.py` | Why Merge Sort and Binary Search, and the pseudocode block by block |
+| 3 | Algorithm Tracing | 4:00 – 9:00 | 5 min | `docs/tracing.md` preview | Merge Sort on 6 records, `find_first` and `find_last` for O+, the -1 case, the distance sort |
+| 4 | Live Application Demonstration | 9:00 – 11:00 | 2 min | Terminal, then the application window | Run it, give sample inputs, show the results (Part 3 below) |
+| 5 | Complexity Analysis | 11:00 – 14:00 | 3 min | `docs/complexity.md` preview, sections 7 and 8 | Time and space for each step, and sort-once against a linear scan |
+| 6 | Conclusion | 14:00 – 15:00 | 1 min | Face large, application behind it | Summary, limitations, possible improvements |
+
+Stay close to these lengths. If a segment runs long, cut words, not content:
+in Segment 3, Merges 1 to 4 can be said in two sentences, but keep Merge 5
+(step 14), both searches for O+, and the final order.
+
+### What the guidelines ask for, and where it is covered
+
+| Guideline | How this video meets it |
+|---|---|
+| Face visible during the speaking portions | Keep the webcam picture on for the whole recording, in a corner. |
+| Screen recording shows the source code | Segment 2 shows `src/algorithms.py` and `src/locator.py` next to the pseudocode. |
+| Screen recording shows the application running | Segment 4 runs `python main.py` live. |
+| At least one algorithm tracing example | Segment 3 traces a 6-record sample; the Trace tab repeats it live in Segment 4. |
+| Explain the code in your own words | Practise from keywords. Do not read the script or the code aloud line by line. |
+| Clear audio | Quiet room, microphone test before the real take. |
+| MP4 file or an accessible link | Export as MP4. If a link is submitted, check that it opens without signing in. |
+| Able to explain and justify the implementation | Part 2 and "Questions you may be asked" below. Be ready to explain any line that is pointed at. |
+
+### Before recording
+
+1. Open a terminal in the project folder and run
+   `python -m unittest discover -s tests -v`. It should end with `OK`.
+2. Run `python main.py` once. Check that the **Today** field shows the real
+   date and that the status bar says 22 records were loaded. Close it again so
+   the demo starts from the terminal.
+3. Open these files as editor tabs, in this order: `README.md`,
+   `docs/pseudocode.md`, `src/algorithms.py`, `src/locator.py`,
+   `docs/tracing.md`, `docs/complexity.md`. Use the Markdown preview for the
+   `.md` files so the tables are readable.
+4. Make the text big enough to read in the video: zoom the editor in a few
+   steps, and close the side panels that are not needed.
+5. Turn off notifications and close anything private (chats, email, other
+   browser tabs).
+6. Fill in the name, section and course blanks in Segment 1 of the script.
+
+### Recording setup
+
+- Record the screen and the webcam together, with the webcam as a small picture
+  in a corner. Any screen recorder that can do both and save MP4 works.
+- Put the webcam picture where it does not hide the code, the trace tables or
+  the application's results table. The top-right corner is usually safest,
+  because the application's status bar is at the bottom.
+- Record a 10-second test first and play it back: is the face visible, is the
+  voice clear and loud enough, can the code be read?
+- Recording one segment at a time and joining the clips is easier than one
+  15-minute take. A mistake then only costs one segment.
+- Move the mouse to the row or line being explained. In Segment 3 the viewer
+  should always know which row of the table is being read.
+
+### Delivery tips
+
+- Rehearse each segment with a timer at least twice before the real take.
+- Write a small cue card of keywords for each segment (for example, for
+  Segment 3: "sample, split, merges 1–4, merge 5, step 14 tie, find_first 3,
+  find_last 4, AB- gives -1, distance sort, Bajada first").
+- Speak a little slower than normal. The script leaves about one minute spare.
+- When explaining code, say what the line is for, not what it literally says:
+  "this keeps looking left for an earlier match", not "high equals mid minus
+  one".
+- After Segment 4, change **Today** back to the real date so the Conclusion
+  does not show an empty table.
+
+### Before submitting
+
+- Watch the whole video once. Check the total length (about 15 minutes), the
+  order of the six segments, and that the face is visible throughout.
+- Check that the file is MP4 and plays on another device, or that the link
+  opens in a private browser window.
+- Submit before November 18, 2026, 5:00 PM, and leave time for the upload.
+
+## Part 2 — What to say for each function
 
 ### `src/algorithms.py`
 
@@ -94,7 +180,7 @@ words; they are prompts, not lines to read out.
   for every patient. Sorting once costs n log n, and after that each search is
   only about log n steps, so it pays off as soon as there are many searches.
 
-## Part 2 — Demo script (about 2 minutes)
+## Part 3 — Demo script (about 2 minutes)
 
 Before recording: open a terminal in the project folder and check that the
 **Today** field shows the real date. The numbers below are for the dataset
