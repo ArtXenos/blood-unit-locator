@@ -4,3 +4,6 @@
 # Python cache files
 __pycache__/
 *.pyc
+
+# Submission zip (built from the project, not part of it)
+Guadalquiver_BloodUnitLocator.zip
